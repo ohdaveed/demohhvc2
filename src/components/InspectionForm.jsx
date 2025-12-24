@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { callGemini, callGeminiVision, fileToBase64 } from '../services/geminiService';
+import { callGemini, callGeminiVision, fileToBase64, batchAnalyzeImages, analyzeWithConfidence, getSuggestedActions } from '../services/geminiService';
+import { storageService } from '../services/storageService';
+import { pdfService } from '../services/pdfService';
+import { calendarService } from '../services/calendarService';
+import { voiceService } from '../services/voiceService';
 import { VIOLATION_DATABASE, VIOLATION_CHECKLIST, AREAS_INSPECTED, INITIAL_TAGS } from '../constants/violations';
 import { ImageEditorModal } from './ImageEditorModal';
 import { 
@@ -35,9 +39,33 @@ function InspectionForm() {
   const [knownTags, setKnownTags] = useState(INITIAL_TAGS); 
   const [isParsingPdf, setIsParsingPdf] = useState(false);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [showDraftModal, setShowDraftModal] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [lastSaved, setLastSaved] = useState(null);
   
   const fileInputRef = useRef(null);
   const pdfInputRef = useRef(null);
+  const reportRef = useRef(null);
+
+  // Load draft on mount
+  useEffect(() => {
+    const hasDraft = storageService.hasDraft();
+    if (hasDraft) {
+      setShowDraftModal(true);
+    }
+  }, []);
+
+  // Auto-save functionality
+  useEffect(() => {
+    const autoSaveInterval = setInterval(() => {
+      const draftId = storageService.saveDraft(formData, images, checkedAreas, checkedViolations);
+      if (draftId) {
+        setLastSaved(new Date());
+      }
+    }, 30000); // Auto-save every 30 seconds
+
+    return () => clearInterval(autoSaveInterval);
+  }, [formData, images, checkedAreas, checkedViolations]);
 
   // Fix memory leak: cleanup object URLs on unmount
   useEffect(() => {
@@ -191,6 +219,72 @@ function InspectionForm() {
     }
   };
 
+  // New feature handlers
+  const handleSaveDraft = () => {
+    const draftId = storageService.saveDraft(formData, images, checkedAreas, checkedViolations);
+    if (draftId) {
+      setLastSaved(new Date());
+      alert('Draft saved successfully!');
+    }
+  };
+
+  const handleLoadDraft = () => {
+    const draft = storageService.loadCurrentDraft();
+    if (draft) {
+      setFormData(draft.formData);
+      setCheckedAreas(new Set(draft.checkedAreas));
+      setCheckedViolations(new Set(draft.checkedViolations));
+      setShowDraftModal(false);
+      alert('Draft loaded successfully!');
+    }
+  };
+
+  const handleExportPDF = () => {
+    if (reportRef.current) {
+      pdfService.generatePDF(reportRef.current);
+    }
+  };
+
+  const handleEmailReport = () => {
+    pdfService.emailReport(formData, formData.reportContent);
+  };
+
+  const handleDownloadReport = () => {
+    pdfService.downloadReport(formData, formData.reportContent);
+  };
+
+  const handleScheduleFollowUp = () => {
+    calendarService.openInCalendar(formData);
+  };
+
+  const handleDownloadCalendar = () => {
+    calendarService.downloadICS(formData);
+  };
+
+  const toggleVoiceInput = () => {
+    if (isListening) {
+      voiceService.stopListening();
+      setIsListening(false);
+    } else {
+      const started = voiceService.startListening(
+        (result) => {
+          if (result.isFinal && result.final) {
+            // Append voice input to report content
+            setFormData(prev => ({
+              ...prev,
+              reportContent: prev.reportContent + ' ' + result.final
+            }));
+          }
+        },
+        (error) => {
+          console.error('Voice input error:', error);
+          setIsListening(false);
+        }
+      );
+      setIsListening(started);
+    }
+  };
+
   const generateReport = async () => {
     setIsGeneratingReport(true);
     
@@ -276,14 +370,71 @@ function InspectionForm() {
           {isParsingPdf ? "Importing..." : "Import PDF"}
         </button>
         <button 
-          onClick={() => window.print()} 
+          onClick={handleSaveDraft} 
+          className="bg-blue-600 text-white px-4 py-3 rounded-full shadow-lg flex items-center gap-2 hover:bg-blue-700 transition-colors font-medium print:hidden"
+          title="Save current progress as draft"
+        >
+          <Download size={18} /> Save Draft
+        </button>
+        <button 
+          onClick={handleExportPDF} 
           className="bg-slate-800 text-white px-4 py-3 rounded-full shadow-lg flex items-center gap-2 hover:bg-slate-700 transition-colors font-medium"
         >
           <Printer size={18} /> Print Report
         </button>
+        <button 
+          onClick={handleEmailReport} 
+          className="bg-emerald-600 text-white px-4 py-3 rounded-full shadow-lg flex items-center gap-2 hover:bg-emerald-700 transition-colors font-medium print:hidden"
+          title="Email this report"
+        >
+          <ArrowRight size={18} /> Email
+        </button>
+        <button 
+          onClick={handleScheduleFollowUp} 
+          className="bg-purple-600 text-white px-4 py-3 rounded-full shadow-lg flex items-center gap-2 hover:bg-purple-700 transition-colors font-medium print:hidden"
+          title="Schedule follow-up inspection"
+        >
+          <Activity size={18} /> Schedule
+        </button>
       </div>
 
-      <div className="max-w-[210mm] mx-auto bg-white shadow-xl min-h-[297mm] print:shadow-none print:w-full">
+      {/* Auto-save indicator */}
+      {lastSaved && (
+        <div className="fixed bottom-4 right-4 bg-green-100 text-green-800 px-4 py-2 rounded-full text-xs font-medium shadow-lg print:hidden">
+          Auto-saved at {lastSaved.toLocaleTimeString()}
+        </div>
+      )}
+
+      {/* Draft load modal */}
+      {showDraftModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center print:hidden">
+          <div className="bg-white rounded-lg shadow-2xl p-6 max-w-md">
+            <h3 className="text-lg font-bold mb-4">Resume Previous Inspection?</h3>
+            <p className="text-sm text-slate-600 mb-6">
+              A saved draft was found. Would you like to continue where you left off?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={handleLoadDraft}
+                className="flex-1 bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700 font-medium"
+              >
+                Load Draft
+              </button>
+              <button
+                onClick={() => {
+                  storageService.clearCurrentDraft();
+                  setShowDraftModal(false);
+                }}
+                className="flex-1 bg-slate-200 text-slate-700 px-4 py-2 rounded hover:bg-slate-300 font-medium"
+              >
+                Start Fresh
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-[210mm] mx-auto bg-white shadow-xl min-h-[297mm] print:shadow-none print:w-full" ref={reportRef}>
         
         {/* HEADER */}
         <div className="p-8 border-b-4 border-slate-800 relative">
@@ -534,13 +685,26 @@ function InspectionForm() {
                  />
               </div>
               
-              <textarea 
-                className="w-full p-4 border border-slate-300 rounded text-sm leading-relaxed min-h-[400px] outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500 whitespace-pre-wrap font-mono"
-                value={formData.reportContent}
-                onChange={handleInputChange}
-                name="reportContent"
-                placeholder="Click 'Generate Full Report' to populate this section with observations, specific violations, and required corrective actions..."
-              />
+              <div className="relative">
+                <textarea 
+                  className="w-full p-4 border border-slate-300 rounded text-sm leading-relaxed min-h-[400px] outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500 whitespace-pre-wrap font-mono"
+                  value={formData.reportContent}
+                  onChange={handleInputChange}
+                  name="reportContent"
+                  placeholder="Click 'Generate Full Report' to populate this section with observations, specific violations, and required corrective actions..."
+                />
+                {voiceService.isSupported() && (
+                  <button
+                    onClick={toggleVoiceInput}
+                    className={`absolute bottom-4 right-4 p-3 rounded-full shadow-lg transition-all print:hidden ${
+                      isListening ? 'bg-red-600 text-white animate-pulse' : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                    }`}
+                    title={isListening ? 'Stop voice input' : 'Start voice input'}
+                  >
+                    <Activity size={18} />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
