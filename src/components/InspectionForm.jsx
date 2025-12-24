@@ -130,7 +130,7 @@ function InspectionForm() {
   const handleFileUpload = async (e) => {
     if (e.target.files && e.target.files.length > 0) {
       const newFileObjects = Array.from(e.target.files).map(file => ({
-        id: Math.random().toString(36).substr(2, 9),
+        id: crypto.randomUUID(),
         file,
         url: URL.createObjectURL(file),
         description: "Analyzing...",

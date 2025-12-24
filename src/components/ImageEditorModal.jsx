@@ -34,7 +34,7 @@ export const ImageEditorModal = ({
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
     
-    const newHighlights = [...(image.highlights || []), { x, y, id: Date.now() }];
+    const newHighlights = [...(image.highlights || []), { x, y, id: crypto.randomUUID() }];
     onUpdate(image.id, { highlights: newHighlights });
   };
 
