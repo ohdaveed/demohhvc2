@@ -1,0 +1,1035 @@
+import React, { useState, useRef, useEffect } from 'react';
+
+// --- ERROR BOUNDARY ---
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, errorInfo) { console.error("Runtime Error:", error, errorInfo); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-8 bg-red-50 text-red-900 min-h-screen flex flex-col items-center justify-center font-sans">
+          <h1 className="text-2xl font-bold mb-4">Application Error</h1>
+          <pre className="bg-white p-4 rounded border border-red-200 text-sm overflow-auto max-w-full mb-4">
+            {this.state.error?.toString()}
+          </pre>
+          <button 
+            type="button" 
+            onClick={() => window.location.reload()} 
+            className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+          >
+            Reload Application
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// --- GEMINI API HELPERS ---
+const apiKey = ""; // Provided by environment
+
+const callGemini = async (prompt, systemInstruction = "") => {
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        mode: "cors",
+        credentials: "omit",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          systemInstruction: { parts: [{ text: systemInstruction }] },
+        }),
+      }
+    );
+    if (!response.ok) throw new Error(`API Error: ${response.status}`);
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  } catch (error) {
+    console.error("Gemini API Error:", error);
+    return null;
+  }
+};
+
+const callGeminiVision = async (prompt, base64Image, mimeType = "image/jpeg") => {
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        mode: "cors",
+        credentials: "omit",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: prompt },
+              { inlineData: { mimeType: mimeType, data: base64Image } } 
+            ]
+          }],
+          generationConfig: { responseMimeType: "application/json" }
+        }),
+      }
+    );
+    if (!response.ok) throw new Error(`API Error: ${response.status}`);
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text;
+  } catch (error) {
+    console.error("Gemini Vision Error:", error);
+    return null;
+  }
+};
+
+const fileToBase64 = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = error => reject(error);
+  });
+};
+
+// --- ICONS ---
+const Upload = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>;
+const Trash2 = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>;
+const Sparkles = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>;
+const Printer = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="6 9 6 2 18 2 18 9" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></svg>;
+const Plus = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>;
+const X = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>;
+const Maximize2 = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" /><line x1="21" y1="3" x2="14" y2="10" /><line x1="3" y1="21" x2="10" y2="14" /></svg>;
+const RefreshCw = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>;
+const Activity = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></svg>;
+const FileText = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>;
+const List = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>;
+const CheckCircle = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>;
+const AlertCircle = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>;
+
+// Missing icons restored to fix ReferenceErrors
+const Camera = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>;
+const Tag = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>;
+const ArrowRight = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>;
+const AlertTriangle = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+const Download = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
+const ChevronRight = (props) => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="9 18 15 12 9 6"/></svg>;
+
+
+// --- HHVC SPECIFIC KNOWLEDGE BASE (Article 11) ---
+const VIOLATION_DATABASE = {
+  // --- VECTORS & PESTS ---
+  'rodent': { 
+    code: 'Sec 581(b)(13)', 
+    title: 'Rodent Infestation', 
+    condition: 'Evidence of rodent activity (burrows, droppings, rub marks) or active harborage observed.', 
+    importance: 'Rodent infestation poses a significant health risk due to the potential spread of diseases like Leptospirosis and Hantavirus. Rodents can also damage property and contaminate food.',
+    action: 'Seal all entry points >1/4 inch with concrete or steel mesh. Remove food sources. Install rodent-proof containers for garbage. Implement a regular pest control program.' 
+  },
+  'rodent burrows': { 
+    code: 'Sec 581(b)(13)', 
+    title: 'Rodent Burrows (Infestation)', 
+    condition: 'Active rodent burrows observed in soil, planters, or exterior grounds.', 
+    importance: 'Burrows indicate an established rodent population nesting on the property, posing immediate health risks.',
+    action: 'Collapse burrows after treatment. Install exclusion barriers (wire mesh) in planters. Contract licensed pest control to treat the exterior grounds.' 
+  },
+  'frass': { 
+    code: 'Sec 581(b)(8)', 
+    title: 'Insect Frass (Excrement)', 
+    condition: 'Accumulation of insect frass (droppings) observed on surfaces.', 
+    importance: 'Frass indicates an active infestation of wood-destroying or vector insects (like cockroaches or termites). It can contaminate surfaces and degrade air quality.',
+    action: 'Clean and sanitize all affected surfaces. Identify the insect source and implement targeted pest control treatment.' 
+  },
+  'cockroach': { 
+    code: 'Sec 581(b)(8)', 
+    title: 'Cockroach Infestation', 
+    condition: 'Live/dead cockroaches, frass, or egg cases observed.', 
+    importance: 'Cockroaches carry bacteria and allergens that can trigger asthma and transmit diseases like Salmonella and E. coli.',
+    action: 'Deep clean to remove grease and food residue. Seal cracks/crevices. Apply gel baits per IPM guidelines. Eliminate moisture sources.' 
+  },
+  'bed bug': { 
+    code: 'Sec 581(b)(8)', 
+    title: 'Bed Bug Infestation', 
+    condition: 'Live bed bugs, cast skins, or fecal spotting observed on bedding or furniture.', 
+    importance: 'Bed bugs cause physical discomfort, allergic reactions, and significant psychological distress to residents.',
+    action: 'Launder all linens/clothing on high heat. Steam clean furniture. Employ a licensed PCO for chemical/heat treatment of the unit and adjacent units.' 
+  },
+  'fly': { 
+    code: 'Sec 581(b)(8)', 
+    title: 'Noxious Insect Harborage (Flies)', 
+    condition: 'Accumulation of fly frass (fly excrement) or excessive fly activity observed.', 
+    importance: 'Flies can transmit pathogens like Salmonella and Shigella to food and surfaces.',
+    action: 'Thoroughly clean and sanitize surfaces affected by fly frass. Identify and eliminate breeding sources (e.g. unsealed garbage). Install screens.' 
+  },
+  'mosquitoes': { 
+    code: 'Sec 581(b)(8)', 
+    title: 'Mosquito Breeding Hazard', 
+    condition: 'Standing water observed supporting mosquito larvae breeding.', 
+    importance: 'Mosquitoes are vectors for diseases such as West Nile Virus and Zika Virus.',
+    action: 'Drain standing water immediately. Maintain drains/gutters to prevent accumulation. Install screens on windows/doors.' 
+  },
+  'pigeon': { 
+    code: 'Sec 581(b)(7)', 
+    title: 'Pigeon Harborage', 
+    condition: 'Accumulation of pigeon guano, nesting materials, or roosting observed.', 
+    importance: 'Pigeon guano can harbor fungal spores (Histoplasmosis) and parasites.',
+    action: 'Remove all nesting materials and guano using proper PPE. Install exclusion devices (netting, spikes) to prevent roosting.' 
+  },
+  
+  // --- SANITATION ---
+  'uncontainerized garbage': { 
+    code: 'Sec 581(b)(1)', 
+    title: 'Uncontainerized Garbage', 
+    condition: 'Loose, unbagged, or exposed garbage observed outside of approved containers.', 
+    importance: 'Uncontainerized garbage provides an easily accessible food source for rodents and vectors, rapidly increasing infestation rates.',
+    action: 'Place all loose garbage into approved, tight-fitting lidded containers immediately. Clean the surrounding area of debris.' 
+  },
+  'garbage': { 
+    code: 'Sec 581(b)(1)', 
+    title: 'Accumulation of Garbage/Refuse', 
+    condition: 'Accumulated refuse, debris, or loose garbage observed.', 
+    importance: 'Excessive garbage accumulation attracts pests (rodents, insects), creates unsanitary conditions, and can lead to vector-borne diseases.',
+    action: 'Regularly remove all trash. Store it in sealed, tight-fitting containers. Ensure proper disposal according to local regulations.' 
+  },
+  'paper': { 
+    code: 'Sec 581(b)(3)', 
+    title: 'Accumulation of Paper Materials', 
+    condition: 'Excessive stacking of paper/combustibles creating fire hazard or pest harborage.', 
+    importance: 'Paper accumulation provides nesting material for rodents and creates a fire hazard.',
+    action: 'Remove excessive paper materials. Organize remaining items to eliminate pest harborage and fire risks.' 
+  },
+  'excessive': { 
+    code: 'Sec 581(b)(18)', 
+    title: 'Excessive Materials (Hoarding)', 
+    condition: 'Accumulation of items obstructing egress or preventing sanitary maintenance.', 
+    importance: 'Clutter prevents proper cleaning, allows pests to hide, and blocks emergency exits.',
+    action: 'Reduce clutter to allow for cleaning and pest control access. Ensure clear paths of egress.' 
+  },
+  'waste': { 
+    code: 'Sec 581(b)(5)', 
+    title: 'Contamination by Human/Animal Waste', 
+    condition: 'Accumulation of feces observed.', 
+    importance: 'Fecal matter contains pathogens and parasites that pose a direct threat to human health.',
+    action: 'Immediately remove and properly dispose of all waste. Sanitize the affected area. Implement a maintenance schedule.' 
+  },
+  'poison_oak': { 
+    code: 'Sec 581(b)(11)', 
+    title: 'Poison Oak', 
+    condition: 'Poison oak observed in areas accessible to tenants or the public.', 
+    importance: 'Poison oak causes severe allergic skin reactions.',
+    action: 'Remove and properly dispose of all poison oak plants. Treat area to prevent regrowth.' 
+  },
+  
+  // --- STRUCTURAL ---
+  'bathroom': { 
+    code: 'Sec 581(b)(4)', 
+    title: 'Unsanitary Bathroom/Toilet', 
+    condition: 'Toilet, sink, or bathroom surfaces are unsanitary, leaking, or in disrepair.', 
+    importance: 'Unsanitary bathrooms can spread bacteria and mold.',
+    action: 'Repair plumbing fixtures. Seal gaps. Deep clean and sanitize all bathroom surfaces.' 
+  },
+  'kitchen': { 
+    code: 'Sec 581(b)(4)', 
+    title: 'Unsanitary Common Kitchen', 
+    condition: 'Kitchen surfaces, equipment, or floors are soiled.', 
+    importance: 'Soiled kitchens attract pests and cause foodborne illness.',
+    action: 'Degrease and sanitize all kitchen surfaces, behind equipment, and floors.' 
+  },
+  'surfaces': { 
+    code: 'Sec 581(b)(1)', 
+    title: 'Unsanitary Floor, Walls, & Ceiling', 
+    condition: 'Surfaces are damaged, soiled, or peeling.', 
+    importance: 'Damaged surfaces cannot be properly cleaned and may harbor pests or mold.',
+    action: 'Repair damaged surfaces to be smooth and cleanable. Repaint or seal as necessary.' 
+  },
+  'mold': { 
+    code: 'Sec 581(b)(6)', 
+    title: 'Mold Growth', 
+    condition: 'Visible mold growth observed on walls, ceilings, or fixtures.', 
+    importance: 'Mold exposure can cause respiratory problems, allergic reactions, and other health issues, particularly for vulnerable populations.',
+    action: 'Remove all mold. Clean and disinfect the area. Ensure proper ventilation. Identify and repair the underlying moisture source.' 
+  },
+  'hallways': { 
+    code: 'Sec 581(b)(5)', 
+    title: 'Unsanitary Hallways', 
+    condition: 'Common hallways are soiled, obstructed, or in disrepair.', 
+    importance: 'Unsanitary hallways affect quality of life and can harbor allergens.',
+    action: 'Clean carpets/floors. Remove obstructions. Maintain hallways in a sanitary condition.' 
+  },
+  'vents': { 
+    code: 'Sec 581(b)(1)', 
+    title: 'Structural Harborage (Broken Vent/Screen)', 
+    condition: 'Broken vents or screens observed allowing potential pest entry.', 
+    importance: 'Open vents provide direct entry points for rodents and insects.',
+    action: 'Repair or replace damaged vents/screens with 1/4 inch mesh to prevent pest entry.' 
+  }
+};
+
+const VIOLATION_CHECKLIST = {
+  pests: [
+    { id: 'rodent', label: 'Rodents (Sec 581(b)(13))' },
+    { id: 'cockroach', label: 'Cockroaches (Sec 581(b)(8))' },
+    { id: 'bedbug', label: 'Bed Bugs (Sec 581(b)(8))' },
+    { id: 'flies', label: 'Flies (Sec 581(b)(8))' },
+    { id: 'mosquitoes', label: 'Mosquitoes (Sec 581(b)(8))' },
+    { id: 'pigeons', label: 'Pigeons (Sec 581(b)(7))' },
+  ],
+  sanitation: [
+    { id: 'garbage_area', label: 'Garbage Area (Sec 581(b)(1))' },
+    { id: 'refuse', label: 'Refuse Accumulation (Sec 581(b)(5))' },
+    { id: 'paper', label: 'Accum. Paper Materials (Sec 581(b)(3))' },
+    { id: 'excessive', label: 'Excessive Materials (Sec 581(b)(18))' },
+    { id: 'waste', label: 'Human/Animal Waste (Sec 581(b)(1))' },
+    { id: 'poison_oak', label: 'Poison Oak (Sec 581(b)(11))' },
+  ],
+  structural: [
+    { id: 'bathroom', label: 'Unsanitary Bathroom (Sec 581(b)(4))' },
+    { id: 'kitchen', label: 'Unsanitary Kitchen (Sec 581(b)(4))' },
+    { id: 'surfaces', label: 'Unsanitary Walls/Floors (Sec 581(b)(1))' },
+    { id: 'mold', label: 'Mold Growth (Sec 581(b)(6))' },
+    { id: 'hallways', label: 'Unsanitary Hallways (Sec 581(b)(5))' },
+    { id: 'vents', label: 'Broken Vents/Screens (Sec 581(b)(1))' },
+  ]
+};
+
+const AREAS_INSPECTED = [
+  'Alleyway/Easement', 'Basement', 'Front/Backyard', 'Garage/Driveway', 
+  'Garbage Area', 'Hallways', 'Laundry Room', 'Lightwells', 
+  'Lobby', 'Roof', 'Staircase', 'Bathroom', 'Kitchen', 'Unit(s)'
+];
+
+const INITIAL_TAGS = [
+  'Rodent Burrows', 'Frass', 'Uncontainerized Garbage', 
+  'Rodent', 'Cockroach', 'Mold', 'Leaking Pipe', 'Broken Window', 
+  'Animal Waste', 'Overgrown Vegetation', 'Fly', 'Bed Bug', 'Hole in Wall'
+];
+
+// --- MODAL COMPONENT (Image Editor) ---
+const ImageEditorModal = ({ 
+  image, 
+  onClose, 
+  onUpdate, 
+  knownTags, 
+  onAddKnownTag, 
+  onNextImage 
+}) => {
+  const [newTag, setNewTag] = useState("");
+  const imgRef = useRef(null);
+
+  useEffect(() => {
+    if (image && image.tags && image.tags.length > 0 && !image.description) {
+      const desc = `Observed ${image.tags.join(', ')} in this location.`;
+      onUpdate(image.id, { description: desc });
+    }
+  }, [image?.tags]);
+
+  if (!image) return null;
+
+  const handleImageClick = (e) => {
+    if (!imgRef.current) return;
+    const rect = imgRef.current.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    
+    const newHighlights = [...(image.highlights || []), { x, y, id: Date.now() }];
+    onUpdate(image.id, { highlights: newHighlights });
+  };
+
+  const removeHighlight = (e, highlightId) => {
+    e.stopPropagation();
+    const newHighlights = (image.highlights || []).filter(h => h.id !== highlightId);
+    onUpdate(image.id, { highlights: newHighlights });
+  };
+
+  const handleAddTag = (tagToAdd) => {
+    const tag = tagToAdd || newTag;
+    if (tag.trim()) {
+      const cleanTag = tag.trim();
+      let updatedTags = image.tags || [];
+      
+      if (!updatedTags.some(t => t.toLowerCase() === cleanTag.toLowerCase())) {
+        updatedTags = [...updatedTags, cleanTag];
+        const newDesc = `Observed ${updatedTags.join(', ')} at this location.`;
+        onUpdate(image.id, { tags: updatedTags, description: newDesc });
+      }
+      
+      onAddKnownTag(cleanTag);
+      setNewTag("");
+    }
+  };
+
+  const removeTag = (tagToRemove) => {
+    const updatedTags = (image.tags || []).filter(t => t !== tagToRemove);
+    const newDesc = updatedTags.length > 0 ? `Observed ${updatedTags.join(', ')} at this location.` : "";
+    onUpdate(image.id, { tags: updatedTags, description: newDesc });
+  };
+
+  const handleVerify = () => {
+    onUpdate(image.id, { status: 'verified' });
+    if (onNextImage) onNextImage();
+    else onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 print:hidden">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-[85vh] flex overflow-hidden">
+        
+        {/* Left: Image Canvas */}
+        <div className="flex-1 bg-slate-900 relative flex items-center justify-center p-4 cursor-crosshair overflow-hidden">
+          <div className="relative inline-block max-w-full max-h-full">
+            <img 
+              ref={imgRef}
+              src={image.url} 
+              alt="Inspection" 
+              className="max-w-full max-h-full object-contain"
+              onClick={handleImageClick}
+            />
+            {(image.highlights || []).map(h => (
+              <div
+                key={h.id}
+                onClick={(e) => removeHighlight(e, h.id)}
+                className="absolute w-12 h-12 border-4 border-red-500 rounded-full -translate-x-1/2 -translate-y-1/2 cursor-pointer hover:bg-red-500/20 transition-colors shadow-sm z-10"
+                style={{ left: `${h.x}%`, top: `${h.y}%` }}
+                title="Click to remove highlight"
+              ></div>
+            ))}
+          </div>
+          <div className="absolute top-4 left-4 bg-black/50 text-white px-3 py-1 rounded-full text-xs backdrop-blur-sm pointer-events-none">
+            Click image to highlight violations
+          </div>
+        </div>
+
+        {/* Right: Controls */}
+        <div className="w-80 bg-white border-l border-slate-200 flex flex-col">
+          <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+            <h3 className="font-bold text-slate-800">Review Evidence</h3>
+            <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${image.status === 'verified' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+              {image.status === 'verified' ? 'Verified' : 'Review Needed'}
+            </div>
+            <button onClick={onClose} className="p-1 hover:bg-slate-200 rounded text-slate-500"><X size={20}/></button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-6">
+            
+            {/* Tag Management */}
+            <div>
+              <label className="block text-xs font-bold uppercase text-slate-500 mb-2">Assigned Tags</label>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {(image.tags || []).map(tag => (
+                  <span key={tag} className="text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded-full border border-indigo-200 flex items-center gap-1 capitalize font-medium">
+                    {tag}
+                    <button onClick={() => removeTag(tag)} className="hover:text-red-500"><X size={12}/></button>
+                  </span>
+                ))}
+                {(image.tags || []).length === 0 && <span className="text-xs text-slate-400 italic">No tags assigned</span>}
+              </div>
+              
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    className="flex-1 text-xs border border-slate-300 rounded px-2 py-1 outline-none focus:border-indigo-500"
+                    placeholder="Add custom tag..."
+                    value={newTag}
+                    onChange={(e) => setNewTag(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddTag()}
+                  />
+                  <button onClick={() => handleAddTag()} className="bg-slate-800 text-white p-1.5 rounded hover:bg-slate-700"><Plus size={14}/></button>
+                </div>
+                
+                {/* Known Tags Quick Select */}
+                <div className="text-[10px] text-slate-500 font-medium mt-2 mb-1">Suggested Tags:</div>
+                <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                  {knownTags.filter(t => !(image.tags || []).includes(t)).map(t => (
+                    <button 
+                      key={t}
+                      onClick={() => handleAddTag(t)}
+                      className="px-2 py-1 bg-white border border-slate-200 rounded hover:bg-slate-50 text-[10px] text-slate-600 capitalize text-left"
+                    >
+                      + {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Description Input */}
+            <div>
+              <label className="block text-xs font-bold uppercase text-slate-500 mb-1">
+                Description (Auto-Updates)
+              </label>
+              <textarea 
+                className="w-full text-sm p-2 border border-slate-300 rounded h-24 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none bg-slate-50"
+                placeholder="Description updates as tags change..."
+                value={image.description || ""}
+                onChange={(e) => onUpdate(image.id, { description: e.target.value })}
+              />
+            </div>
+
+          </div>
+
+          <div className="p-4 border-t border-slate-200 bg-slate-50 text-center">
+            <button 
+              onClick={handleVerify} 
+              className="bg-emerald-600 text-white w-full py-2 rounded-lg text-sm font-semibold hover:bg-emerald-700 shadow-sm flex items-center justify-center gap-2"
+            >
+              <span>Confirm & Next</span>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- MAIN APPLICATION ---
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <InspectionForm />
+    </ErrorBoundary>
+  );
+}
+
+function InspectionForm() {
+  // State
+  const [formData, setFormData] = useState({
+    date: new Date().toISOString().split('T')[0],
+    timeIn: "09:00",
+    timeOut: "10:30",
+    address: "",
+    dba: "",
+    owner: "",
+    management: "",
+    caseNum: `SF-${new Date().getFullYear()}-001`,
+    inspector: "",
+    facilityType: "Apartment",
+    inspectionType: "Routine",
+    reportContent: "", 
+    correctionDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], 
+    locationId: "",
+    complaintId: "",
+  });
+
+  const [checkedAreas, setCheckedAreas] = useState(new Set());
+  const [checkedViolations, setCheckedViolations] = useState(new Set());
+  const [images, setImages] = useState([]);
+  const [modalImageId, setModalImageId] = useState(null);
+  const [knownTags, setKnownTags] = useState(INITIAL_TAGS); 
+  const [isParsingPdf, setIsParsingPdf] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  
+  const fileInputRef = useRef(null);
+  const pdfInputRef = useRef(null);
+
+  // Handlers
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const toggleArea = (area) => {
+    const next = new Set(checkedAreas);
+    if (next.has(area)) next.delete(area);
+    else next.add(area);
+    setCheckedAreas(next);
+  };
+
+  const toggleViolation = (id) => {
+    const next = new Set(checkedViolations);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setCheckedViolations(next);
+  };
+
+  const addKnownTag = (tag) => {
+    const cleanTag = tag.trim();
+    if (!knownTags.some(t => t.toLowerCase() === cleanTag.toLowerCase())) {
+      setKnownTags(prev => [...prev, cleanTag]);
+    }
+  };
+
+  // PDF Handling
+  const handlePdfUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsParsingPdf(true);
+    try {
+      const base64 = await fileToBase64(file);
+      const prompt = `Analyze PDF... {extract standard fields}`; 
+      const text = await callGeminiVision(prompt, base64, "application/pdf");
+      if (text) {
+         const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+         const data = JSON.parse(cleanJson);
+         setFormData(prev => ({ ...prev, ...data }));
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Failed to parse PDF.");
+    } finally {
+      setIsParsingPdf(false);
+      if (pdfInputRef.current) pdfInputRef.current.value = '';
+    }
+  };
+
+  // --- AUTOMATED TAGGING WORKFLOW ---
+  const analyzeImageForTags = async (img) => {
+    try {
+      const base64 = await fileToBase64(img.file);
+      const mimeType = img.file.type || "image/jpeg";
+      
+      const allTagOptions = knownTags.join(', ');
+      
+      const prompt = `
+        Analyze this inspection photo.
+        Identify if any of the following conditions are present: ${allTagOptions}.
+        Return a JSON object with a key "tags" containing an array of strings matching the identified conditions.
+        Example: {"tags": ["Rodent Burrows", "Uncontainerized Garbage"]}
+      `;
+
+      const text = await callGeminiVision(prompt, base64, mimeType);
+      const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      const result = JSON.parse(cleanJson);
+      
+      return result.tags || [];
+    } catch (e) {
+      console.error("Auto-tagging error", e);
+      return [];
+    }
+  };
+
+  const handleFileUpload = async (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const newFileObjects = Array.from(e.target.files).map(file => ({
+        id: Math.random().toString(36).substr(2, 9),
+        file,
+        url: URL.createObjectURL(file),
+        description: "Analyzing...",
+        tags: [],
+        highlights: [],
+        status: 'analyzing' 
+      }));
+
+      setImages(prev => [...prev, ...newFileObjects]);
+      
+      setModalImageId(newFileObjects[0].id);
+
+      newFileObjects.forEach(async (imgObj) => {
+        const detectedTags = await analyzeImageForTags(imgObj);
+        
+        setImages(prev => prev.map(img => {
+          if (img.id === imgObj.id) {
+            const desc = detectedTags.length > 0 
+              ? `Observed ${detectedTags.join(', ')} at this location.` 
+              : "No specific violations detected by AI.";
+            
+            return { 
+              ...img, 
+              tags: detectedTags, 
+              description: desc,
+              status: 'needs_review' 
+            };
+          }
+          return img;
+        }));
+      });
+    }
+  };
+
+  const removeImage = (id) => {
+    setImages(prev => prev.filter(img => img.id !== id));
+    if (modalImageId === id) setModalImageId(null);
+  };
+
+  const updateImage = (id, updates) => {
+    setImages(prev => prev.map(img => img.id === id ? { ...img, ...updates } : img));
+  };
+
+  const handleNextImage = () => {
+    if (!modalImageId) return;
+    const currentIndex = images.findIndex(img => img.id === modalImageId);
+    if (currentIndex !== -1 && currentIndex < images.length - 1) {
+      setModalImageId(images[currentIndex + 1].id);
+    } else {
+      setModalImageId(null); 
+    }
+  };
+
+  const generateReport = async () => {
+    setIsGeneratingReport(true);
+    
+    // 1. GATHER ALL VIOLATIONS & METADATA
+    const checklistFindings = Array.from(checkedViolations).map(id => {
+       const dbEntry = VIOLATION_DATABASE[id] || {};
+       return { name: id, abatement: dbEntry.action, importance: dbEntry.importance, code: dbEntry.code };
+    });
+
+    const imageFindings = images.map((img, idx) => ({
+      source: `Photo #${idx + 1}`,
+      tags: img.tags,
+      description: img.description || "Observed on property.",
+      status: img.status
+    })).filter(f => f.tags && f.tags.length > 0);
+
+    const prompt = `
+      You are generating the COMPLETE narrative body text for an official San Francisco DPH Notice of Violation.
+      
+      CONTEXT:
+      - Date: ${formData.date}
+      - Property: ${formData.address}
+      - Inspection Type: ${formData.inspectionType}
+      - Correction Deadline: ${formData.correctionDate}
+      
+      INPUT DATA:
+      1. Violations Identified (Checklist): ${JSON.stringify(checklistFindings)}
+      2. Photo Evidence (User Reviewed): ${JSON.stringify(imageFindings)}
+      
+      INSTRUCTIONS:
+      1. Start with the EXACT sentence: "The following Items Represent Health Code Violations and Must Be Corrected By the Indicated Date(s): ${formData.correctionDate}"
+      
+      2. Write a brief "Observations" narrative paragraph summarizing the inspection (reason, access, general findings).
+      
+      3. Generate a "Corrective Actions" section. For each violation type found (consolidating checklist & photos), use this EXACT format:
+      
+      VIOLATION #[N]: [Title] - [Code Section]
+      Location: [Specific location from photo description or general area]
+      Condition Observed: [Description of observation. Explain why it is a health hazard using the "Importance" data provided.]
+      Required Correction: [Specific actionable steps using the "Abatement" data provided.]
+
+      4. End with the standard enforcement notice: "Failure to comply with this Notice of Violation will result in a citation to a Director's Hearing pursuant to Section 596(e)(3)..." (and the rest of the standard legal text regarding fees and fines).
+
+      Do not use markdown code blocks. Use plain text suitable for a textarea.
+    `;
+
+    const text = await callGemini(prompt);
+    if (text) setFormData(prev => ({ ...prev, reportContent: text }));
+    setIsGeneratingReport(false);
+  };
+
+  const selectedImage = images.find(img => img.id === modalImageId);
+
+  return (
+    <div className="min-h-screen bg-slate-100 py-8 font-sans print:bg-white print:p-0">
+      
+      {modalImageId && (
+        <ImageEditorModal 
+          image={selectedImage}
+          onClose={() => setModalImageId(null)}
+          onUpdate={updateImage}
+          knownTags={knownTags}
+          onAddKnownTag={addKnownTag}
+          onNextImage={handleNextImage} 
+        />
+      )}
+
+      {/* --- FLOATING ACTION BAR (Hidden on Print) --- */}
+      <div className="fixed bottom-6 right-6 flex gap-3 print:hidden z-40">
+        <input 
+          type="file" 
+          accept="application/pdf" 
+          className="hidden" 
+          ref={pdfInputRef}
+          onChange={handlePdfUpload} 
+        />
+        <button 
+          onClick={() => pdfInputRef.current.click()} 
+          disabled={isParsingPdf}
+          className="bg-indigo-600 text-white px-4 py-3 rounded-full shadow-lg flex items-center gap-2 hover:bg-indigo-700 transition-colors font-medium disabled:opacity-50"
+        >
+          {isParsingPdf ? <Activity size={18} className="animate-spin"/> : <FileText size={18}/>}
+          {isParsingPdf ? "Importing..." : "Import PDF"}
+        </button>
+        <button 
+          onClick={() => window.print()} 
+          className="bg-slate-800 text-white px-4 py-3 rounded-full shadow-lg flex items-center gap-2 hover:bg-slate-700 transition-colors font-medium"
+        >
+          <Printer size={18} /> Print Report
+        </button>
+      </div>
+
+      <div className="max-w-[210mm] mx-auto bg-white shadow-xl min-h-[297mm] print:shadow-none print:w-full">
+        
+        {/* HEADER */}
+        <div className="p-8 border-b-4 border-slate-800 relative">
+          <div className="flex justify-between items-start mb-6">
+            <div className="w-16 h-16 bg-slate-900 text-white flex items-center justify-center font-bold text-2xl rounded">SF</div>
+            <div className="text-right">
+              <h1 className="text-xl font-bold uppercase tracking-wider text-slate-900">Notice of Violation</h1>
+              <h2 className="text-sm font-semibold uppercase text-slate-500">Healthy Housing & Vector Control</h2>
+              <p className="text-xs text-slate-400 mt-1">San Francisco Dept. of Public Health</p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-4 gap-4 text-xs font-mono border-t border-slate-200 pt-4">
+            <div>
+              <label className="block text-slate-400 uppercase mb-1">Date</label>
+              <input type="date" name="date" value={formData.date} onChange={handleInputChange} className="w-full font-bold bg-transparent outline-none" />
+            </div>
+            <div>
+              <label className="block text-slate-400 uppercase mb-1">Time In</label>
+              <input type="time" name="timeIn" value={formData.timeIn} onChange={handleInputChange} className="w-full font-bold bg-transparent outline-none" />
+            </div>
+            <div>
+              <label className="block text-slate-400 uppercase mb-1">Time Out</label>
+              <input type="time" name="timeOut" value={formData.timeOut} onChange={handleInputChange} className="w-full font-bold bg-transparent outline-none" />
+            </div>
+            <div>
+              <label className="block text-slate-400 uppercase mb-1">Case Number</label>
+              <input type="text" name="caseNum" value={formData.caseNum} onChange={handleInputChange} className="w-full font-bold bg-transparent outline-none" />
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 1: LOCATION INFO */}
+        <div className="px-8 py-6 border-b border-slate-200">
+          <h3 className="text-xs font-bold uppercase text-slate-500 mb-4 tracking-wider">Location Information</h3>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+            <div className="group">
+              <label className="block text-[10px] uppercase font-bold text-slate-400 group-focus-within:text-indigo-600">Property Address</label>
+              <input type="text" name="address" value={formData.address} onChange={handleInputChange} className="w-full border-b border-slate-300 py-1 focus:border-indigo-600 outline-none transition-colors" placeholder="123 Main St..." />
+            </div>
+            <div className="group">
+              <label className="block text-[10px] uppercase font-bold text-slate-400 group-focus-within:text-indigo-600">Owner Name</label>
+              <input type="text" name="owner" value={formData.owner} onChange={handleInputChange} className="w-full border-b border-slate-300 py-1 focus:border-indigo-600 outline-none transition-colors" />
+            </div>
+            <div className="group">
+              <label className="block text-[10px] uppercase font-bold text-slate-400 group-focus-within:text-indigo-600">DBA / Business Name</label>
+              <input type="text" name="dba" value={formData.dba} onChange={handleInputChange} className="w-full border-b border-slate-300 py-1 focus:border-indigo-600 outline-none transition-colors" />
+            </div>
+            <div className="group">
+              <label className="block text-[10px] uppercase font-bold text-slate-400 group-focus-within:text-indigo-600">Management Company</label>
+              <input type="text" name="management" value={formData.management} onChange={handleInputChange} className="w-full border-b border-slate-300 py-1 focus:border-indigo-600 outline-none transition-colors" />
+            </div>
+            {/* Extended Fields for PDF Extraction */}
+            <div className="group">
+              <label className="block text-[10px] uppercase font-bold text-slate-400 group-focus-within:text-indigo-600">Location ID</label>
+              <input type="text" name="locationId" value={formData.locationId} onChange={handleInputChange} className="w-full border-b border-slate-300 py-1 focus:border-indigo-600 outline-none transition-colors" />
+            </div>
+            <div className="group">
+              <label className="block text-[10px] uppercase font-bold text-slate-400 group-focus-within:text-indigo-600">Complaint ID</label>
+              <input type="text" name="complaintId" value={formData.complaintId} onChange={handleInputChange} className="w-full border-b border-slate-300 py-1 focus:border-indigo-600 outline-none transition-colors" />
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 2: FACILITY DETAILS (Checkboxes) */}
+        <div className="px-8 py-6 border-b border-slate-200 bg-slate-50">
+          <div className="grid grid-cols-3 gap-6">
+            <div>
+              <h4 className="text-[10px] font-bold uppercase text-slate-500 mb-2">Type of Facility</h4>
+              <div className="space-y-1">
+                {['Apartment', 'Tourist Hotel', 'SRO', 'Private Residence'].map(type => (
+                  <label key={type} className="flex items-center gap-2 cursor-pointer text-xs">
+                    <input 
+                      type="radio" 
+                      name="facilityType" 
+                      value={type} 
+                      checked={formData.facilityType === type} 
+                      onChange={handleInputChange}
+                      className="accent-slate-900" 
+                    />
+                    {type}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h4 className="text-[10px] font-bold uppercase text-slate-500 mb-2">Inspection Type</h4>
+              <div className="space-y-1">
+                {['Routine', 'Complaint', 'Re-inspection', 'Survey'].map(type => (
+                  <label key={type} className="flex items-center gap-2 cursor-pointer text-xs">
+                    <input 
+                      type="radio" 
+                      name="inspectionType" 
+                      value={type} 
+                      checked={formData.inspectionType === type} 
+                      onChange={handleInputChange}
+                      className="accent-slate-900" 
+                    />
+                    {type}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h4 className="text-[10px] font-bold uppercase text-slate-500 mb-2">Areas Inspected</h4>
+              <div className="grid grid-cols-2 gap-1">
+                {AREAS_INSPECTED.map(area => (
+                  <label key={area} className="flex items-center gap-1 cursor-pointer text-[10px] whitespace-nowrap">
+                    <input 
+                      type="checkbox" 
+                      checked={checkedAreas.has(area)} 
+                      onChange={() => toggleArea(area)}
+                      className="accent-slate-900 w-3 h-3" 
+                    />
+                    {area}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 3: VIOLATION CHECKLIST */}
+        <div className="px-8 py-6 border-b border-slate-200">
+          <h3 className="text-xs font-bold uppercase text-slate-500 mb-4 tracking-wider flex items-center justify-between">
+            <span>Violation Categories (Article 11)</span>
+          </h3>
+          <div className="grid grid-cols-3 gap-8">
+            <div>
+              <h4 className="text-[10px] font-bold uppercase text-slate-400 mb-2 border-b border-slate-100 pb-1">Pests & Vectors</h4>
+              <div className="space-y-1.5">
+                {VIOLATION_CHECKLIST.pests.map(v => (
+                  <label key={v.id} className="flex items-start gap-2 cursor-pointer text-xs group">
+                    <input type="checkbox" checked={checkedViolations.has(v.id)} onChange={() => toggleViolation(v.id)} className="mt-0.5 accent-red-600" />
+                    <span className={checkedViolations.has(v.id) ? "text-red-700 font-medium" : "text-slate-600"}>{v.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h4 className="text-[10px] font-bold uppercase text-slate-400 mb-2 border-b border-slate-100 pb-1">Sanitation</h4>
+              <div className="space-y-1.5">
+                {VIOLATION_CHECKLIST.sanitation.map(v => (
+                  <label key={v.id} className="flex items-start gap-2 cursor-pointer text-xs group">
+                    <input type="checkbox" checked={checkedViolations.has(v.id)} onChange={() => toggleViolation(v.id)} className="mt-0.5 accent-red-600" />
+                    <span className={checkedViolations.has(v.id) ? "text-red-700 font-medium" : "text-slate-600"}>{v.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h4 className="text-[10px] font-bold uppercase text-slate-400 mb-2 border-b border-slate-100 pb-1">Structural</h4>
+              <div className="space-y-1.5">
+                {VIOLATION_CHECKLIST.structural.map(v => (
+                  <label key={v.id} className="flex items-start gap-2 cursor-pointer text-xs group">
+                    <input type="checkbox" checked={checkedViolations.has(v.id)} onChange={() => toggleViolation(v.id)} className="mt-0.5 accent-red-600" />
+                    <span className={checkedViolations.has(v.id) ? "text-red-700 font-medium" : "text-slate-600"}>{v.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 4: PHOTO DOCUMENTATION (GRID) */}
+        <div className="px-8 py-6 border-b border-slate-200">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider">Evidence & Observations</h3>
+            <div className="print:hidden flex gap-3">
+              <input type="file" multiple accept="image/*" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
+              <button onClick={() => fileInputRef.current.click()} className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded text-xs font-medium transition-colors">
+                <Upload size={14} /> Upload Photos
+              </button>
+            </div>
+          </div>
+
+          {images.length > 0 ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 print:grid-cols-2">
+              {images.map((img, idx) => (
+                <div key={img.id} className={`relative group border rounded-lg overflow-hidden bg-white shadow-sm flex flex-col h-full break-inside-avoid ${img.status === 'verified' ? 'border-emerald-400 ring-1 ring-emerald-400' : 'border-slate-200'}`}>
+                  <div className="relative aspect-square cursor-pointer bg-slate-100" onClick={() => setModalImageId(img.id)}>
+                    <img src={img.url} alt="Evidence" className="w-full h-full object-cover" />
+                    
+                    {/* Status Badge */}
+                    <div className="absolute top-2 left-2 z-10">
+                      {img.status === 'analyzing' && <span className="bg-indigo-600 text-white text-[9px] px-1.5 py-0.5 rounded shadow">Analyzing...</span>}
+                      {img.status === 'needs_review' && <span className="bg-amber-500 text-white text-[9px] px-1.5 py-0.5 rounded shadow">Review Needed</span>}
+                      {img.status === 'verified' && <span className="bg-emerald-600 text-white text-[9px] px-1.5 py-0.5 rounded shadow flex items-center gap-1"><CheckCircle size={8} /> Verified</span>}
+                    </div>
+
+                    {(img.highlights || []).map(h => (
+                      <div key={h.id} className="absolute w-4 h-4 border-2 border-red-500 rounded-full -translate-x-1/2 -translate-y-1/2 pointer-events-none" style={{ left: `${h.x}%`, top: `${h.y}%` }}></div>
+                    ))}
+                    
+                    {!img.status || img.status !== 'analyzing' ? (
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 print:hidden">
+                        <div className="bg-white/20 p-2 rounded-full backdrop-blur-sm"><Maximize2 className="text-white" size={20} /></div>
+                      </div>
+                    ) : null}
+                    
+                    <button onClick={(e) => { e.stopPropagation(); removeImage(img.id); }} className="absolute top-1 right-1 p-1 bg-red-600 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-700 print:hidden" title="Delete"><Trash2 size={12} /></button>
+                  </div>
+                  <div className="p-2 text-[10px] leading-tight flex-1">
+                    <div className="font-bold text-slate-400 mb-1">Photo #{idx + 1}</div>
+                    <p className="text-slate-800 line-clamp-3">{img.description || <span className="italic text-slate-400">No description...</span>}</p>
+                    {img.tags && img.tags.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {img.tags.slice(0, 3).map(tag => (<span key={tag} className="px-1 bg-slate-100 border border-slate-200 rounded text-[9px] text-slate-600 capitalize">{tag}</span>))}
+                        {img.tags.length > 3 && <span className="text-[9px] text-slate-400">+{img.tags.length - 3}</span>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="border-2 border-dashed border-slate-200 rounded-lg p-8 text-center print:hidden">
+              <p className="text-slate-400 text-sm">No photos uploaded. Click "Upload Photos" to begin evidence collection.</p>
+            </div>
+          )}
+        </div>
+
+        {/* SECTION 5: UNIFIED REPORT CONTENT */}
+        <div className="px-8 py-6 pb-12 border-b border-slate-200">
+          <div className="mb-4 relative group">
+            <div className="flex justify-between items-end mb-2">
+              <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider">Observations, Corrective Actions, and Correction Date</h3>
+              {/* Generate Report Button (Hidden on Print) */}
+              <button 
+                onClick={generateReport}
+                disabled={isGeneratingReport}
+                className="text-[10px] text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 print:hidden"
+              >
+                <List size={10} /> 
+                {isGeneratingReport ? "Generating..." : "Generate Full Report"}
+              </button>
+            </div>
+            
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-4 bg-slate-50 p-2 rounded border border-slate-200">
+                 <label className="text-[10px] uppercase font-bold text-slate-500 whitespace-nowrap">Correction Date:</label>
+                 <input 
+                   type="date" 
+                   name="correctionDate" 
+                   value={formData.correctionDate} 
+                   onChange={handleInputChange} 
+                   className="bg-transparent text-sm font-bold text-slate-900 outline-none" 
+                 />
+              </div>
+              
+              <textarea 
+                className="w-full p-4 border border-slate-300 rounded text-sm leading-relaxed min-h-[400px] outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500 whitespace-pre-wrap font-mono"
+                value={formData.reportContent}
+                onChange={handleInputChange}
+                name="reportContent"
+                placeholder="Click 'Generate Full Report' to populate this section with observations, specific violations, and required corrective actions..."
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* FOOTER */}
+        <div className="px-8 py-6 pb-12">
+          <div className="grid grid-cols-2 gap-12 text-xs text-slate-600 border-t border-slate-200 pt-6">
+            <div>
+              <p className="font-bold uppercase mb-2 text-slate-900">Compliance Order</p>
+              <p className="leading-relaxed text-justify">You are hereby ordered to correct the violations listed above by the Correction Date specified. A re-inspection will be conducted on or after this date. Failure to comply may result in administrative penalties, liens, or legal action per SF Health Code Article 11.</p>
+            </div>
+            <div>
+              <p className="font-bold uppercase mb-8 text-slate-900">Inspector Signature</p>
+              <div className="border-b border-black mb-2"></div>
+              <div className="flex justify-between font-mono"><span>{formData.inspector || "Inspector Name"}</span><span>REHS #______</span></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
