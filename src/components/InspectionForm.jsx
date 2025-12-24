@@ -67,7 +67,7 @@ function InspectionForm() {
     return () => clearInterval(autoSaveInterval);
   }, [formData, images, checkedAreas, checkedViolations]);
 
-  // Fix memory leak: cleanup object URLs on unmount
+  // Fix memory leak: cleanup object URLs on unmount only
   useEffect(() => {
     return () => {
       images.forEach(img => {
@@ -76,7 +76,8 @@ function InspectionForm() {
         }
       });
     };
-  }, [images]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run cleanup only on unmount, not on every images change
 
   // Handlers
   const handleInputChange = (e) => {
