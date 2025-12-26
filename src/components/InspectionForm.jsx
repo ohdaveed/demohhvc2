@@ -46,6 +46,8 @@ function InspectionForm() {
   const fileInputRef = useRef(null);
   const pdfInputRef = useRef(null);
   const reportRef = useRef(null);
+  const imagesRef = useRef(images);
+  imagesRef.current = images;
 
   // Load draft on mount
   useEffect(() => {
@@ -67,16 +69,17 @@ function InspectionForm() {
     return () => clearInterval(autoSaveInterval);
   }, [formData, images, checkedAreas, checkedViolations]);
 
-  // Fix memory leak: cleanup object URLs on unmount
+  // Fix memory leak: cleanup object URLs on unmount using ref to access latest state
   useEffect(() => {
     return () => {
-      images.forEach(img => {
+      imagesRef.current.forEach(img => {
         if (img.url) {
           URL.revokeObjectURL(img.url);
         }
       });
     };
-  }, [images]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run cleanup only on unmount, accessing latest images via ref
 
   // Handlers
   const handleInputChange = (e) => {
